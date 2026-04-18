@@ -1785,6 +1785,34 @@ export function issueService(db: Db) {
       if (!issueCompany) throw notFound("Issue not found");
       await assertAssignableAgent(issueCompany.companyId, agentId);
 
+      // --- SOP Workflow: blockedBy dependency guard ---
+      // If this issue has unresolved blockers (via issue_relations "blocks"),
+      // refuse checkout so the SOP pipeline gate is enforced.
+      const TERMINAL_STATUSES = ["done", "cancelled"];
+      const blockerRows = await db
+        .select({
+          blockerIssueId: issueRelations.issueId,
+          blockerStatus: issues.status,
+        })
+        .from(issueRelations)
+        .innerJoin(issues, eq(issues.id, issueRelations.issueId))
+        .where(
+          and(
+            eq(issueRelations.relatedIssueId, id),
+            eq(issueRelations.type, "blocks"),
+          ),
+        );
+      const unresolvedBlockers = blockerRows.filter(
+        (r) => !TERMINAL_STATUSES.includes(r.blockerStatus),
+      );
+      if (unresolvedBlockers.length > 0) {
+        throw conflict("Issue is blocked by unresolved dependencies", {
+          issueId: id,
+          unresolvedBlockerIds: unresolvedBlockers.map((r) => r.blockerIssueId),
+        });
+      }
+      // --- End SOP Workflow guard ---
+
       const now = new Date();
 
       // Fix C: staleness detection — if executionRunId references a run that is no

@@ -76,6 +76,7 @@ import {
   writePaperclipSkillSyncPreference,
 } from "@paperclipai/adapter-utils/server-utils";
 import { extractSkillMentionIds } from "@paperclipai/shared";
+import { assembleMemoryContext } from "./memory-injector.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const MAX_PERSISTED_LOG_CHUNK_CHARS = 64 * 1024;
@@ -3409,9 +3410,14 @@ export function heartbeatService(db: Db) {
       runScopedMentionedSkillKeys,
     );
     const runtimeSkillEntries = await companySkills.listRuntimeSkillEntries(agent.companyId);
+
+    // --- Layered Memory System: inject file-based memory context ---
+    const agentNameKey = agent.name ?? agent.id;
+    const memoryContext = await assembleMemoryContext(agentNameKey, issueId ?? null);
     const runtimeConfig = {
       ...effectiveResolvedConfig,
       paperclipRuntimeSkills: runtimeSkillEntries,
+      ...(memoryContext.text ? { paperclipMemoryContext: memoryContext.text } : {}),
     };
     const workspaceOperationRecorder = workspaceOperationsSvc.createRecorder({
       companyId: agent.companyId,
