@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { workflowsApi, type WorkflowTemplate, type WorkflowNodeDef } from "../api/workflows";
+import { workflowsApi, type WorkflowTemplate } from "../api/workflows";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { Button } from "@/components/ui/button";
-import { GitBranch, Plus, Play, Trash2, ChevronRight, ShieldCheck, Cog } from "lucide-react";
+import { GitBranch, Plus, Play, Trash2, ChevronRight, ShieldCheck, Cog, Edit } from "lucide-react";
+import { WorkflowEditor } from "../components/workflow-editor/WorkflowEditor";
 
 // ---------------------------------------------------------------------------
 // Workflow Templates list page
@@ -17,8 +18,9 @@ export function Workflows() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
 
-  const [showCreateForm, setShowCreateForm] = useState(false);
   const [showInstantiateFor, setShowInstantiateFor] = useState<string | null>(null);
+  const [showWorkflowEditor, setShowWorkflowEditor] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<WorkflowTemplate | null>(null);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Workflows" }]);
@@ -58,29 +60,24 @@ export function Workflows() {
       <section>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold">SOP Templates</h2>
-          <Button size="sm" variant="outline" onClick={() => setShowCreateForm(true)}>
+          <Button size="sm" variant="outline" onClick={() => {
+            setEditingTemplate(null);
+            setShowWorkflowEditor(true);
+          }}>
             <Plus className="h-3.5 w-3.5 mr-1.5" />
             New Template
           </Button>
         </div>
 
-        {showCreateForm && (
-          <CreateTemplateForm
-            companyId={selectedCompanyId}
-            onCreated={() => {
-              setShowCreateForm(false);
-              queryClient.invalidateQueries({ queryKey: ["workflows", "templates", selectedCompanyId] });
-            }}
-            onCancel={() => setShowCreateForm(false)}
-          />
-        )}
-
-        {templates && templates.length === 0 && !showCreateForm && (
+        {templates && templates.length === 0 && (
           <EmptyState
             icon={GitBranch}
             message="No SOP templates yet. Create one to define your development pipeline."
             action="Create Template"
-            onAction={() => setShowCreateForm(true)}
+            onAction={() => {
+              setEditingTemplate(null);
+              setShowWorkflowEditor(true);
+            }}
           />
         )}
 
@@ -123,6 +120,16 @@ export function Workflows() {
                   <Button size="sm" variant="default" onClick={() => setShowInstantiateFor(tpl.id)}>
                     <Play className="h-3.5 w-3.5 mr-1" />
                     Run
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setEditingTemplate(tpl);
+                      setShowWorkflowEditor(true);
+                    }}
+                  >
+                    <Edit className="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     size="sm"
@@ -204,91 +211,18 @@ export function Workflows() {
           </div>
         )}
       </section>
-    </div>
-  );
-}
 
-// ---------------------------------------------------------------------------
-// Create Template Form (inline)
-// ---------------------------------------------------------------------------
-
-function CreateTemplateForm(props: {
-  companyId: string;
-  onCreated: () => void;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [nodesJson, setNodesJson] = useState<string>(
-    JSON.stringify(
-      [
-        { id: "n1_prd", type: "task", title: "[PRD] {{feature_name}}", assigneeRole: "product-manager", description: "Design the PRD" },
-        { id: "n2_prd_review", type: "approval_gate", title: "Review PRD", assigneeRole: "human", blockedBy: ["n1_prd"] },
-        { id: "n3_ux", type: "task", title: "[UX] {{feature_name}}", assigneeRole: "ux-designer", blockedBy: ["n2_prd_review"] },
-        { id: "n4_ux_review", type: "approval_gate", title: "Review UX", assigneeRole: "human", blockedBy: ["n3_ux"] },
-        { id: "n5_dev", type: "task", title: "[Dev] {{feature_name}}", assigneeRole: "developer", blockedBy: ["n4_ux_review"] },
-      ],
-      null,
-      2,
-    ),
-  );
-  const [error, setError] = useState<string | null>(null);
-
-  const mutation = useMutation({
-    mutationFn: () => {
-      let nodes: WorkflowNodeDef[];
-      try {
-        nodes = JSON.parse(nodesJson);
-      } catch {
-        throw new Error("Invalid JSON in nodes definition");
-      }
-      return workflowsApi.createTemplate(props.companyId, { name, description: description || undefined, nodes });
-    },
-    onSuccess: () => props.onCreated(),
-    onError: (err: Error) => setError(err.message),
-  });
-
-  return (
-    <div className="rounded-lg border border-border bg-card p-4 mb-4 space-y-3">
-      <h3 className="text-sm font-semibold">New SOP Template</h3>
-      <div>
-        <label className="text-xs text-muted-foreground">Name</label>
-        <input
-          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Feature Pipeline"
-        />
-      </div>
-      <div>
-        <label className="text-xs text-muted-foreground">Description</label>
-        <input
-          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Standard feature development SOP"
-        />
-      </div>
-      <div>
-        <label className="text-xs text-muted-foreground">
-          Pipeline Nodes (JSON) — use {"{{variable}}"} for template variables
-        </label>
-        <textarea
-          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-xs font-mono leading-relaxed"
-          rows={14}
-          value={nodesJson}
-          onChange={(e) => setNodesJson(e.target.value)}
-        />
-      </div>
-      {error && <p className="text-xs text-destructive">{error}</p>}
-      <div className="flex gap-2">
-        <Button size="sm" onClick={() => mutation.mutate()} disabled={!name || mutation.isPending}>
-          {mutation.isPending ? "Creating..." : "Create Template"}
-        </Button>
-        <Button size="sm" variant="ghost" onClick={props.onCancel}>
-          Cancel
-        </Button>
-      </div>
+      {/* Workflow Editor Modal */}
+      <WorkflowEditor
+        companyId={selectedCompanyId}
+        template={editingTemplate}
+        isOpen={showWorkflowEditor}
+        onClose={() => setShowWorkflowEditor(false)}
+        onSuccess={() => {
+          setShowWorkflowEditor(false);
+          queryClient.invalidateQueries({ queryKey: ["workflows", "templates", selectedCompanyId] });
+        }}
+      />
     </div>
   );
 }

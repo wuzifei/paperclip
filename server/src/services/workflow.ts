@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { and, eq, desc } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { workflowTemplates, workflowInstances } from "@paperclipai/db";
@@ -198,6 +199,9 @@ export function workflowService(db: Db) {
       const nodes = template.nodes as WorkflowNodeDef[];
       const sorted = topoSort(nodes);
 
+      // Pre-generate instanceId so issues can reference it
+      const instanceId = randomUUID();
+
       // nodeId -> created issue id
       const nodeIssueMap: Record<string, string> = {};
 
@@ -222,7 +226,7 @@ export function workflowService(db: Db) {
           goalId: input.goalId ?? null,
           blockedByIssueIds,
           originKind: "workflow",
-          originId: input.templateId,
+          originId: instanceId,
         });
 
         nodeIssueMap[node.id] = issue.id;
@@ -233,6 +237,7 @@ export function workflowService(db: Db) {
       const [instance] = await db
         .insert(workflowInstances)
         .values({
+          id: instanceId,
           companyId: input.companyId,
           templateId: input.templateId,
           name: instanceName,

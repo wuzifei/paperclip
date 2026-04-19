@@ -7,6 +7,7 @@ export interface WorkflowNodeDef {
   assigneeRole: string;
   description?: string;
   blockedBy?: string[];
+  position?: { x: number; y: number }; // <-- Added explicitly so TS is completely happy with JSON serialization
 }
 
 export interface WorkflowTemplate {
