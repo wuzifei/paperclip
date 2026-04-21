@@ -5,6 +5,7 @@ import { useDialog } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { issuesApi } from "../api/issues";
+import { workflowsApi } from "../api/workflows";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { projectsApi } from "../api/projects";
 import { agentsApi } from "../api/agents";
@@ -24,8 +25,7 @@ import {
 } from "../lib/assignees";
 import {
   Dialog,
-  DialogContent,
-} from "@/components/ui/dialog";
+  DialogContent,  DialogTitle,} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { ToggleSwitch } from "@/components/ui/toggle-switch";
 import {
@@ -305,6 +305,7 @@ export function NewIssueDialog() {
   const [dialogCompanyId, setDialogCompanyId] = useState<string | null>(null);
   const [stagedFiles, setStagedFiles] = useState<StagedIssueFile[]>([]);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
+  const [workflowTemplateId, setWorkflowTemplateId] = useState<string>("");
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const executionWorkspaceDefaultProjectId = useRef<string | null>(null);
 
@@ -329,6 +330,12 @@ export function NewIssueDialog() {
   const { data: agents } = useQuery({
     queryKey: queryKeys.agents.list(effectiveCompanyId!),
     queryFn: () => agentsApi.list(effectiveCompanyId!),
+    enabled: !!effectiveCompanyId && newIssueOpen,
+  });
+
+  const { data: workflowTemplates } = useQuery({
+    queryKey: ["workflows", "templates", effectiveCompanyId],
+    queryFn: () => workflowsApi.listTemplates(effectiveCompanyId!),
     enabled: !!effectiveCompanyId && newIssueOpen,
   });
 
@@ -539,6 +546,7 @@ export function NewIssueDialog() {
       setAssigneeChrome(false);
       setExecutionWorkspaceMode(defaultExecutionWorkspaceMode);
       setSelectedExecutionWorkspaceId(newIssueDefaults.executionWorkspaceId ?? "");
+      setWorkflowTemplateId(newIssueDefaults.workflowTemplateId ?? "");
       executionWorkspaceDefaultProjectId.current = defaultProjectId || null;
     } else if (newIssueDefaults.title) {
       setTitle(newIssueDefaults.title);
@@ -712,6 +720,19 @@ export function NewIssueDialog() {
       reviewerValues: reviewerValue ? [reviewerValue] : [],
       approverValues: approverValue ? [approverValue] : [],
     });
+    if (workflowTemplateId) {
+      // Workflow mode: instantiate the pipeline instead of creating a plain issue
+      workflowsApi.instantiate(effectiveCompanyId, {
+        templateId: workflowTemplateId,
+        variables: { title: title.trim() },
+        ...(projectId ? { projectId } : {}),
+        ...(newIssueDefaults.goalId ? { goalId: newIssueDefaults.goalId } : {}),
+      }).then(() => {
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(effectiveCompanyId) });
+        closeNewIssue();
+      }).catch(() => {});
+      return;
+    }
     createIssue.mutate({
       companyId: effectiveCompanyId,
       stagedFiles,
@@ -1091,7 +1112,30 @@ export function NewIssueDialog() {
           <div className="px-4 pb-2">
             <div className="overflow-x-auto overscroll-x-contain">
               <div className="inline-flex items-center gap-2 text-sm text-muted-foreground flex-wrap sm:flex-nowrap sm:min-w-max">
-              <span className="w-6 shrink-0 text-center">For</span>
+              {workflowTemplateId && workflowTemplates ? (
+                (() => {
+                  const template = workflowTemplates.find((t) => t.id === workflowTemplateId);
+                  // Find entry node: first node with no blockedBy dependencies
+                  const entryNode = template?.nodes.find((n) => !n.blockedBy || n.blockedBy.length === 0);
+                  const assigneeAgent = entryNode?.assigneeAgentId
+                    ? (agents ?? []).find((a) => a.id === entryNode.assigneeAgentId)
+                    : null;
+                  return (
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/60 rounded px-2 py-1">
+                      {assigneeAgent ? (
+                        <>
+                          <AgentIcon icon={assigneeAgent.icon} className="h-3 w-3" />
+                          <span>{assigneeAgent.name}</span>
+                        </>
+                      ) : (
+                        <span>No assignee set in workflow template</span>
+                      )}
+                    </span>
+                  );
+                })()
+              ) : (
+                <>
+                <span className="w-6 shrink-0 text-center">For</span>
               <InlineEntitySelector
                 ref={assigneeSelectorRef}
                 value={assigneeValue}
@@ -1143,6 +1187,8 @@ export function NewIssueDialog() {
                 }}
               />
               <span>in</span>
+                </>
+              )}
               <InlineEntitySelector
                 ref={projectSelectorRef}
                 value={projectId}
@@ -1183,6 +1229,21 @@ export function NewIssueDialog() {
                   );
                 }}
               />
+
+              {/* Workflow selector */}
+              {workflowTemplates && workflowTemplates.length > 0 && (
+                <select
+                  value={workflowTemplateId}
+                  onChange={(e) => setWorkflowTemplateId(e.target.value)}
+                  className="h-7 rounded-md border-0 bg-transparent px-2 text-xs text-muted-foreground hover:bg-accent/50 focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer"
+                  title="Link to workflow"
+                >
+                  <option value="">No workflow</option>
+                  {workflowTemplates.map((tpl) => (
+                    <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
+                  ))}
+                </select>
+              )}
 
               {/* Three-dot menu to add Reviewer / Approver rows */}
               <Popover open={participantMenuOpen} onOpenChange={setParticipantMenuOpen}>

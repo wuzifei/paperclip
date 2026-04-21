@@ -1,12 +1,16 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { workflowService, issueService, logActivity } from "../services/index.js";
+import { workflowService, issueService, logActivity, approvalService, issueApprovalService, heartbeatService } from "../services/index.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { queueIssueAssignmentWakeup, type IssueAssignmentWakeupDeps } from "../services/issue-assignment-wakeup.js";
 
 export function workflowRoutes(db: Db) {
   const router = Router();
   const wfSvc = workflowService(db);
   const issueSvc = issueService(db);
+  const approvalSvc = approvalService(db);
+  const issueAppSvc = issueApprovalService(db);
+  const heartbeat = heartbeatService(db) as IssueAssignmentWakeupDeps;
 
   // ---- Templates ----
 
@@ -108,6 +112,9 @@ export function workflowRoutes(db: Db) {
    *
    * Creates all Issues with blockedBy relations and returns the
    * workflow instance with its nodeIssueMap.
+   * 
+   * NEW: intercepts `approvalGateCreate` from the backend DAG, automatically registers 
+   * isolated Approval tickets, and links them back to the generated issue tasks via issueAppSvc!
    */
   router.post("/companies/:companyId/workflows/instantiate", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -130,7 +137,7 @@ export function workflowRoutes(db: Db) {
         projectId: projectId ?? null,
         goalId: goalId ?? null,
       },
-      (cId, data) => issueSvc.create(cId, data),
+      (cId, data) => issueSvc.create(cId, data)
     );
 
     await logActivity(db, {
@@ -141,8 +148,24 @@ export function workflowRoutes(db: Db) {
       action: "workflow_instance.created",
       entityType: "workflow_instance",
       entityId: result.instance.id,
-      details: { templateId, variables, nodeCount: Object.keys(result.nodeIssueMap).length },
+      details: { templateId, variables, issueId: result.issueId },
     });
+
+    // Wake up the assignee agent immediately
+    if (result.issueId && heartbeat) {
+      const issue = await issueSvc.getById(result.issueId);
+      if (issue) {
+        void queueIssueAssignmentWakeup({
+          heartbeat,
+          issue,
+          reason: "workflow_instantiated",
+          mutation: "create",
+          contextSource: "workflow.instantiate",
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
+        });
+      }
+    }
 
     res.status(201).json(result);
   });

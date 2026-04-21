@@ -4,10 +4,11 @@ export interface WorkflowNodeDef {
   id: string;
   type: "task" | "approval_gate";
   title: string;
-  assigneeRole: string;
+  assigneeAgentId: string;
+  assigneeRole?: string;
   description?: string;
   blockedBy?: string[];
-  position?: { x: number; y: number }; // <-- Added explicitly so TS is completely happy with JSON serialization
+  position?: { x: number; y: number };
 }
 
 export interface WorkflowTemplate {
@@ -29,6 +30,8 @@ export interface WorkflowInstance {
   status: string;
   variables: Record<string, string>;
   nodeIssueMap: Record<string, string>;
+  issueId: string | null;
+  currentNodeId: string | null;
   createdByUserId: string | null;
   createdAt: string;
   updatedAt: string;
@@ -36,7 +39,7 @@ export interface WorkflowInstance {
 
 export interface InstantiateResult {
   instance: WorkflowInstance;
-  nodeIssueMap: Record<string, string>;
+  issueId: string;
 }
 
 export const workflowsApi = {

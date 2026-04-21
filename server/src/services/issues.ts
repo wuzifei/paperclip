@@ -22,6 +22,11 @@ import {
   projectWorkspaces,
   projects,
 } from "@paperclipai/db";
+import { triggerWorkflowGateIfReady } from "./workflow-gate-hook.js";
+import { advanceWorkflow } from "./workflow-advance-engine.js";
+import { approvalService } from "./approvals.js";
+import { workflowInstances, workflowTemplates } from "@paperclipai/db";
+import type { WorkflowNodeDef } from "@paperclipai/db/schema/workflow_templates";
 import type { IssueRelationIssueSummary } from "@paperclipai/shared";
 import { extractAgentMentionIds, extractProjectMentionIds, isUuidLike } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
@@ -125,6 +130,114 @@ type IssueRelationSummaryMap = {
   blockedBy: IssueRelationIssueSummary[];
   blocks: IssueRelationIssueSummary[];
 };
+
+async function checkSubIssueApproval(
+  db: Db,
+  companyId: string,
+  parentId: string,
+  assigneeAgentId: string,
+  issueData: Record<string, unknown>,
+) {
+  const parentIssue = await db
+    .select({
+      id: issues.id,
+      companyId: issues.companyId,
+      originKind: issues.originKind,
+      originId: issues.originId,
+    })
+    .from(issues)
+    .where(eq(issues.id, parentId))
+    .then((rows) => rows[0] ?? null);
+
+  if (!parentIssue || parentIssue.originKind !== "workflow" || !parentIssue.originId) return null;
+
+  const workflowInstance = await db
+    .select({
+      id: workflowInstances.id,
+      templateId: workflowInstances.templateId,
+      companyId: workflowInstances.companyId,
+    })
+    .from(workflowInstances)
+    .where(eq(workflowInstances.id, parentIssue.originId))
+    .then((rows) => rows[0] ?? null);
+
+  if (!workflowInstance) return null;
+
+  const workflowTemplate = await db
+    .select({
+      id: workflowTemplates.id,
+      companyId: workflowTemplates.companyId,
+      nodes: workflowTemplates.nodes,
+    })
+    .from(workflowTemplates)
+    .where(eq(workflowTemplates.id, workflowInstance.templateId))
+    .then((rows) => rows[0] ?? null);
+
+  if (!workflowTemplate) return null;
+
+  const nodes = workflowTemplate.nodes as WorkflowNodeDef[];
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+
+  const directDownstreamOfGate = new Set<string>();
+  for (const node of nodes) {
+    if (node.type === "approval_gate" && node.blockedBy) continue;
+    if (node.blockedBy) {
+      for (const depId of node.blockedBy) {
+        const dep = nodeMap.get(depId);
+        if (dep && dep.type === "approval_gate") {
+          directDownstreamOfGate.add(node.id);
+        }
+      }
+    }
+  }
+
+  const visited = new Set<string>();
+  const queue = [...directDownstreamOfGate];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (const node of nodes) {
+      if (node.blockedBy?.includes(current) && !visited.has(node.id)) {
+        queue.push(node.id);
+      }
+    }
+  }
+
+  const gatedAgentIds = new Set(
+    [...visited]
+      .map(id => nodeMap.get(id))
+      .filter((n): n is WorkflowNodeDef => !!n && n.type === "task" && !!n.assigneeAgentId)
+      .map(n => n.assigneeAgentId),
+  );
+
+  console.log("[sub-issue-approval-check]", {
+    gatedAgentIds: [...gatedAgentIds],
+    subIssueAssignee: assigneeAgentId,
+    needsApproval: gatedAgentIds.has(assigneeAgentId),
+  });
+
+  if (!gatedAgentIds.has(assigneeAgentId)) return null;
+
+  const approvalSvc = approvalService(db);
+  return approvalSvc.create(companyId, {
+    type: "sub_issue_creation",
+    requestedByUserId: (issueData.createdByUserId as string | null | undefined) ?? null,
+    requestedByAgentId: (issueData.createdByAgentId as string | null | undefined) ?? null,
+    status: "pending",
+    payload: {
+      parentIssueId: parentId,
+      companyId,
+      subIssueData: {
+        title: issueData.title as string,
+        description: issueData.description as string | null | undefined,
+        assigneeAgentId,
+        projectId: issueData.projectId as string | null | undefined,
+        goalId: issueData.goalId as string | null | undefined,
+      },
+    },
+  });
+}
 
 function sameRunLock(checkoutRunId: string | null, actorRunId: string | null) {
   if (actorRunId) return checkoutRunId === actorRunId;
@@ -1429,8 +1542,14 @@ export function issueService(db: Db) {
         labelIds: inputLabelIds,
         blockedByIssueIds,
         inheritExecutionWorkspaceFromIssueId,
+        parentId,
         ...issueData
       } = data;
+
+      if (parentId && issueData.assigneeAgentId && issueData.originKind !== "sub_issue" && issueData.originKind !== "routine_execution") {
+        const approvalResult = await checkSubIssueApproval(db, companyId, parentId, issueData.assigneeAgentId, issueData);
+        if (approvalResult) return approvalResult as any;
+      }
       const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
       if (!isolatedWorkspacesEnabled) {
         delete issueData.executionWorkspaceId;
@@ -1457,7 +1576,7 @@ export function issueService(db: Db) {
         let executionWorkspacePreference = issueData.executionWorkspacePreference ?? null;
         let executionWorkspaceSettings =
           (issueData.executionWorkspaceSettings as Record<string, unknown> | null | undefined) ?? null;
-        const workspaceInheritanceIssueId = inheritExecutionWorkspaceFromIssueId ?? issueData.parentId ?? null;
+        const workspaceInheritanceIssueId = inheritExecutionWorkspaceFromIssueId ?? parentId ?? null;
         const hasExplicitExecutionWorkspaceOverride =
           issueData.executionWorkspaceId !== undefined ||
           issueData.executionWorkspacePreference !== undefined ||
@@ -1739,7 +1858,24 @@ export function issueService(db: Db) {
         return enriched;
       };
 
-      return dbOrTx === db ? db.transaction(runUpdate) : runUpdate(dbOrTx);
+      const result = await (dbOrTx === db ? db.transaction(runUpdate) : runUpdate(dbOrTx));
+
+      // Workflow advance hook: when an issue transitions to "in_review",
+      // the current workflow node is considered done → advance to next node.
+      if (result && issueData.status === "in_review") {
+        advanceWorkflow(db, id).catch((err) => {
+          console.error("[workflow-advance] failed:", err);
+        });
+      }
+
+      // Legacy gate hook (no longer needed in v2, kept as safety net for old instances)
+      if (result && issueData.status === "done") {
+        triggerWorkflowGateIfReady(db, id).catch((err) => {
+          console.error("[workflow-gate-hook] failed:", err);
+        });
+      }
+
+      return result;
     },
 
     remove: (id: string) =>

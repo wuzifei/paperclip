@@ -1,4 +1,4 @@
-import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck } from "lucide-react";
+import { UserPlus, Lightbulb, ShieldAlert, ShieldCheck, GitBranch } from "lucide-react";
 import { formatCents } from "../lib/utils";
 
 export const typeLabel: Record<string, string> = {
@@ -6,6 +6,7 @@ export const typeLabel: Record<string, string> = {
   approve_ceo_strategy: "CEO Strategy",
   budget_override_required: "Budget Override",
   request_board_approval: "Board Approval",
+  workflow_gate: "Workflow Phase Approval",
 };
 
 function firstNonEmptyString(...values: unknown[]): string | null {
@@ -23,6 +24,7 @@ export function approvalSubject(payload?: Record<string, unknown> | null): strin
     payload?.name,
     payload?.summary,
     payload?.recommendedAction,
+    payload?.nodeTitle,
   );
 }
 
@@ -41,6 +43,7 @@ export const typeIcon: Record<string, typeof UserPlus> = {
   approve_ceo_strategy: Lightbulb,
   budget_override_required: ShieldAlert,
   request_board_approval: ShieldCheck,
+  workflow_gate: GitBranch,
 };
 
 export const defaultTypeIcon = ShieldCheck;
@@ -229,6 +232,34 @@ function BoardApprovalPayloadContent({ payload }: { payload: Record<string, unkn
   );
 }
 
+
+export function WorkflowGatePayload({ payload }: { payload: Record<string, unknown> }) {
+  const instanceId = String(payload.workflowInstanceId ?? "—");
+  const isTruncated = instanceId.length > 8;
+  const shortId = isTruncated ? instanceId.substring(0, 8) + "..." : instanceId;
+  
+  return (
+    <div className="mt-3 space-y-2.5 text-sm">
+      <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-3.5 py-3">
+        <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-blue-700 dark:text-blue-300">
+          Workflow Checkpoint Reached
+        </p>
+        <p className="mt-1 text-sm leading-6 text-foreground">
+          This pipeline is paused and awaiting authorization to proceed.
+        </p>
+      </div>
+
+      <div className="space-y-1.5 pt-2">
+        <PayloadField label="Pipeline ID" value={shortId} />
+        <PayloadField label="Target Role" value={payload.originalAssigneeRole} />
+        {typeof payload.nodeId === "string" && payload.nodeId && (
+          <PayloadField label="SOP Node Key" value={payload.nodeId} />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ApprovalPayloadRenderer({
   type,
   payload,
@@ -240,6 +271,7 @@ export function ApprovalPayloadRenderer({
 }) {
   if (type === "hire_agent") return <HireAgentPayload payload={payload} />;
   if (type === "budget_override_required") return <BudgetOverridePayload payload={payload} />;
+  if (type === "workflow_gate") return <WorkflowGatePayload payload={payload} />;
   if (type === "request_board_approval") {
     return <BoardApprovalPayload payload={payload} hideTitle={hidePrimaryTitle} />;
   }

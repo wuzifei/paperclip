@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { workflowsApi, type WorkflowTemplate, type WorkflowNodeDef } from "@/api/workflows";
+import { agentsApi } from "@/api/agents";
 import {
   WorkflowEditorState,
   stripPosition,
@@ -43,6 +44,11 @@ export function WorkflowEditor({
   const [hasChanges, setHasChanges] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(true);
   const [showRawJson, setShowRawJson] = useState(false);
+  const { data: agents = [] } = useQuery({
+    queryKey: ["agents", companyId],
+    queryFn: () => agentsApi.list(companyId),
+    enabled: isOpen,
+  });
 
   // Load template data when opening or template changes
   useEffect(() => {
@@ -107,11 +113,15 @@ export function WorkflowEditor({
 
   // Add a new node
   function addNode(type: "task" | "approval_gate") {
+    // 新建节点时，assigneeRole 和 assigneeAgentId 都应为空
+    // 用户在 NodePropertiesPanel 中选择 Agent 后才会赋值
+    const isGate = type === "approval_gate";
     const newNode = {
       id: generateNodeId(),
       type,
       title: type === "task" ? "New Task" : "Review Gate",
-      assigneeRole: type === "task" ? "developer" : "human",
+      assigneeAgentId: isGate ? "me" : "",
+      assigneeRole: isGate ? "human" : "", // 选择 Agent 后会从 Agent.role 获取
       description: "",
       blockedBy: [] as string[],
       position: {
@@ -243,6 +253,7 @@ export function WorkflowEditor({
             <NodePropertiesPanel
               node={editorState.nodes.find((n) => n.id === editorState.selectedNodeId) ?? null}
               allNodes={editorState.nodes}
+              agents={agents}
               isOpen={!!editorState.selectedNodeId}
               onClose={() => updateState({ selectedNodeId: null })}
               onUpdate={(nodeId, updates) => {

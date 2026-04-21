@@ -3,10 +3,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { workflowsApi, type WorkflowTemplate } from "../api/workflows";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useDialog } from "../context/DialogContext";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { Button } from "@/components/ui/button";
-import { GitBranch, Plus, Play, Trash2, ChevronRight, ShieldCheck, Cog, Edit } from "lucide-react";
+import { GitBranch, Plus, FilePlus, Trash2, ChevronRight, ShieldCheck, Cog, Edit, Play } from "lucide-react";
 import { WorkflowEditor } from "../components/workflow-editor/WorkflowEditor";
 
 // ---------------------------------------------------------------------------
@@ -16,9 +17,9 @@ import { WorkflowEditor } from "../components/workflow-editor/WorkflowEditor";
 export function Workflows() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const { openNewIssue } = useDialog();
   const queryClient = useQueryClient();
 
-  const [showInstantiateFor, setShowInstantiateFor] = useState<string | null>(null);
   const [showWorkflowEditor, setShowWorkflowEditor] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<WorkflowTemplate | null>(null);
 
@@ -117,9 +118,13 @@ export function Workflows() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 ml-4">
-                  <Button size="sm" variant="default" onClick={() => setShowInstantiateFor(tpl.id)}>
-                    <Play className="h-3.5 w-3.5 mr-1" />
-                    Run
+                  <Button
+                    size="sm"
+                    variant="default"
+                    onClick={() => openNewIssue({ workflowTemplateId: tpl.id })}
+                  >
+                    <FilePlus className="h-3.5 w-3.5 mr-1" />
+                    New Issue
                   </Button>
                   <Button
                     size="sm"
@@ -148,17 +153,7 @@ export function Workflows() {
           </div>
         )}
 
-        {showInstantiateFor && (
-          <InstantiateModal
-            companyId={selectedCompanyId}
-            template={templates?.find((t) => t.id === showInstantiateFor) ?? null}
-            onDone={() => {
-              setShowInstantiateFor(null);
-              queryClient.invalidateQueries({ queryKey: ["workflows", "instances", selectedCompanyId] });
-            }}
-            onCancel={() => setShowInstantiateFor(null)}
-          />
-        )}
+        {/* InstantiateModal removed – "New Issue" button now handles instantiation */}
       </section>
 
       {/* ---- Active Workflow Instances Section ---- */}

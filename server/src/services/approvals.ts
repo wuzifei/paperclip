@@ -7,6 +7,9 @@ import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { issueApprovalService } from "./issue-approvals.js";
+import { advanceWorkflowAfterApproval } from "./workflow-advance-engine.js";
+import { issueService } from "./issues.js";
 
 export function approvalService(db: Db) {
   const agentsSvc = agentService(db);
@@ -162,6 +165,42 @@ export function approvalService(db: Db) {
             sourceId: id,
             approvedAt: now,
           }).catch(() => {});
+        }
+      }
+
+      // Workflow gate: if this approval is for a workflow_gate, advance the pipeline
+      if (applied && updated.type === "workflow_gate") {
+        const issueAppSvc = issueApprovalService(db);
+        const linkedIssues = await issueAppSvc.listIssuesForApproval(id);
+        for (const linked of linkedIssues) {
+          advanceWorkflowAfterApproval(db, linked.id).catch((err) => {
+            console.error("[workflow-advance] post-approval advance failed:", err);
+          });
+        }
+      }
+
+      // Sub-issue creation approval: create the pending sub-issue after approval
+      if (applied && updated.type === "sub_issue_creation") {
+        const payload = updated.payload as {
+          parentIssueId: string;
+          companyId: string;
+          subIssueData: {
+            title: string;
+            description?: string;
+            assigneeAgentId: string;
+            projectId?: string;
+            goalId?: string;
+          };
+        };
+        if (payload) {
+          const svc = issueService(db);
+          await svc.create(payload.companyId, {
+            ...payload.subIssueData,
+            parentId: payload.parentIssueId,
+            originKind: "sub_issue",
+            originId: updated.id,
+            createdByUserId: decidedByUserId,
+          });
         }
       }
 

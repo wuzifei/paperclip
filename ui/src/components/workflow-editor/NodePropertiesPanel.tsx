@@ -17,15 +17,25 @@ import { X, Plus } from "lucide-react";
 interface NodePropertiesPanelProps {
   node: WorkflowNodeWithPosition | null;
   allNodes: WorkflowNodeWithPosition[];
+  agents: Agent[];
   isOpen: boolean;
   onClose: () => void;
   onUpdate: (nodeId: string, updates: Partial<WorkflowNodeWithPosition>) => void;
   onAdd: (type: "task" | "approval_gate") => void;
 }
 
+import type { Agent } from '@paperclipai/shared';
+import { AGENT_ROLE_LABELS } from '@paperclipai/shared';
+
+function getRoleLabel(role: string | null | undefined): string {
+  if (!role) return "";
+  return AGENT_ROLE_LABELS[role as keyof typeof AGENT_ROLE_LABELS] ?? role.replace(/_/g, " ");
+}
+
 export function NodePropertiesPanel({
   node,
   allNodes,
+  agents,
   isOpen,
   onClose,
   onUpdate,
@@ -33,7 +43,7 @@ export function NodePropertiesPanel({
 }: NodePropertiesPanelProps) {
   const [title, setTitle] = useState("");
   const [type, setType] = useState<"task" | "approval_gate">("task");
-  const [assigneeRole, setAssigneeRole] = useState("");
+  const [assigneeAgentId, setAssigneeAgentId] = useState("");
   const [description, setDescription] = useState("");
   const [blockedBy, setBlockedBy] = useState<string[]>([]);
 
@@ -41,7 +51,7 @@ export function NodePropertiesPanel({
     if (node) {
       setTitle(node.title);
       setType(node.type);
-      setAssigneeRole(node.assigneeRole);
+      setAssigneeAgentId(node.assigneeAgentId ?? "");
       setDescription(node.description ?? "");
       setBlockedBy(node.blockedBy ?? []);
     }
@@ -49,13 +59,18 @@ export function NodePropertiesPanel({
 
   function handleSave(overrides?: Partial<WorkflowNodeWithPosition>) {
     if (!node) return;
-    onUpdate(node.id, { 
-      title, 
-      type, 
-      assigneeRole, 
-      description, 
+    const isGate = overrides?.type === "approval_gate" || (!overrides?.type && type === "approval_gate");
+    const saveAssigneeId = isGate ? "me" : assigneeAgentId;
+    const saveAssigneeRole = overrides?.assigneeRole ?? node.assigneeRole ?? "";
+
+    onUpdate(node.id, {
+      assigneeAgentId: saveAssigneeId,
+      assigneeRole: saveAssigneeRole,
+      title,
+      type,
+      description,
       blockedBy,
-      ...overrides 
+      ...overrides,
     });
   }
 
@@ -114,7 +129,9 @@ export function NodePropertiesPanel({
                 value={type}
                 onValueChange={(value: "task" | "approval_gate") => {
                   setType(value);
-                  handleSave({ type: value });
+                  const newAssigneeId = value === "approval_gate" ? "me" : assigneeAgentId;
+                  if (value === "approval_gate") setAssigneeAgentId("me");
+                  handleSave({ type: value, assigneeAgentId: newAssigneeId });
                 }}
               >
                 <SelectTrigger id="node-type">
@@ -138,14 +155,49 @@ export function NodePropertiesPanel({
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="node-assignee">Assignee Role</Label>
-              <Input
-                id="node-assignee"
-                value={assigneeRole}
-                onChange={(e) => setAssigneeRole(e.target.value)}
-                placeholder="e.g., developer, product-manager"
-                onBlur={() => handleSave()}
-              />
+              <Label htmlFor="node-assignee">Assignee</Label>
+              <Select
+                value={type === "approval_gate" ? "me" : assigneeAgentId}
+                onValueChange={(value) => {
+                  setAssigneeAgentId(value);
+                  // 选择 Agent 时，同时设置 assigneeAgentId 和 assigneeRole
+                  // assigneeRole 存储的是 agent.name（显示名称），不是 role
+                  if (value === "me") {
+                    // 手动审批的情况
+                    handleSave({ assigneeAgentId: "me", assigneeRole: "human" });
+                  } else {
+                    // 从 agents 列表中找到所选 Agent，获取其 name 作为 assigneeRole
+                    const selectedAgent = agents.find((a) => a.id === value);
+                    handleSave({
+                      assigneeAgentId: value,
+                      assigneeRole: selectedAgent?.name ?? "",
+                    });
+                  }
+                }}
+                disabled={type === "approval_gate"}
+              >
+                <SelectTrigger id="node-assignee">
+                  <SelectValue placeholder="Select an assignee..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="me">
+                    <span className="font-medium">Me (Manual Approval)</span>
+                  </SelectItem>
+                  {agents.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      <div className="flex items-center justify-between w-full pr-4 gap-4">
+                        <span>{a.name}</span>
+                        <span className="text-[10px] text-muted-foreground opacity-70">{getRoleLabel(a.role)}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {type === "approval_gate" && (
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Approval gates are automatically assigned to the human initiator.
+                </p>
+              )}
             </div>
 
             <div className="space-y-1.5">

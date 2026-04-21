@@ -1336,13 +1336,41 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
-    const issue = await svc.create(companyId, {
+    const result = await svc.create(companyId, {
       ...req.body,
       executionPolicy,
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,
     });
 
+    // Check if the result is a pending approval (for sub-issue creation)
+    // Approval objects have a 'type' field, Issue objects don't
+    if (result && typeof result === "object" && "type" in result && "payload" in result) {
+      const approval = result as { id: string; type: string; status: string; payload: Record<string, unknown> };
+      const subIssueData = (approval.payload?.subIssueData ?? {}) as Record<string, unknown>;
+      const parentIssueId = approval.payload?.parentIssueId as string | undefined;
+      res.status(202).json({
+        id: approval.id,
+        companyId,
+        parentId: parentIssueId ?? null,
+        title: subIssueData.title ?? "Pending approval",
+        description: `⚠️ SUB-ISSUE CREATION PENDING APPROVAL — This sub-issue requires human approval before it can be created and assigned. The approval request has been submitted (approval ID: ${approval.id}). Do NOT retry creating this sub-issue. Do NOT implement this task yourself. Wait for the approval to be resolved.`,
+        status: "blocked",
+        priority: "medium",
+        assigneeAgentId: null,
+        assigneeUserId: null,
+        identifier: "PENDING-APPROVAL",
+        issueNumber: -1,
+        originKind: "sub_issue_approval_pending",
+        originId: approval.id,
+        labels: [],
+        labelIds: [],
+        note: `Sub-issue creation for agent ${subIssueData.assigneeAgentId ?? "unknown"} is pending human approval. Approval ID: ${approval.id}. Do not retry or implement this task yourself.`,
+      });
+      return;
+    }
+
+    // Normal issue creation - continue with existing logic
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,
@@ -1351,17 +1379,17 @@ export function issueRoutes(
       runId: actor.runId,
       action: "issue.created",
       entityType: "issue",
-      entityId: issue.id,
+      entityId: result.id,
       details: {
-        title: issue.title,
-        identifier: issue.identifier,
+        title: result.title,
+        identifier: result.identifier,
         ...(Array.isArray(req.body.blockedByIssueIds) ? { blockedByIssueIds: req.body.blockedByIssueIds } : {}),
       },
     });
 
     void queueIssueAssignmentWakeup({
       heartbeat,
-      issue,
+      issue: result,
       reason: "issue_assigned",
       mutation: "create",
       contextSource: "issue.create",
@@ -1369,7 +1397,7 @@ export function issueRoutes(
       requestedByActorId: actor.actorId,
     });
 
-    res.status(201).json(issue);
+    res.status(201).json(result);
   });
 
   router.patch("/issues/:id", validate(updateIssueRouteSchema), async (req, res) => {

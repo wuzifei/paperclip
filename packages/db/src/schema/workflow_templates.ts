@@ -7,7 +7,7 @@ import { companies } from "./companies.js";
  * Each template describes a reusable pipeline (DAG of nodes).
  * `nodes` is a JSONB array conforming to the WorkflowNodeDef[] type:
  *
- *   { id, type, title, assigneeRole, description?, blockedBy? }
+ *   { id, type, title, assigneeAgentId, description?, blockedBy? }
  *
  * Templates are company-scoped so different companies can have
  * independent SOP libraries.
@@ -17,9 +17,11 @@ export interface WorkflowNodeDef {
   id: string;
   type: "task" | "approval_gate";
   title: string;
-  assigneeRole: string;
+  assigneeAgentId: string;
+  assigneeRole?: string;
   description?: string;
   blockedBy?: string[];
+  position?: { x: number; y: number };
 }
 
 export const workflowTemplates = pgTable(

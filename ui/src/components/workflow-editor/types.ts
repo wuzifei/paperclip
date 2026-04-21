@@ -28,7 +28,7 @@ export interface NodePaletteItem {
   label: string;
   icon: string;
   defaultTitle: string;
-  defaultAssigneeRole: string;
+  defaultAssigneeAgentId: string;
 }
 
 export const NODE_PALETTE: NodePaletteItem[] = [
@@ -37,14 +37,14 @@ export const NODE_PALETTE: NodePaletteItem[] = [
     label: "Task",
     icon: "⚙️",
     defaultTitle: "New Task",
-    defaultAssigneeRole: "developer",
+    defaultAssigneeAgentId: "", // Will be selected by user
   },
   {
     type: "approval_gate",
     label: "Approval Gate",
     icon: "🛡️",
     defaultTitle: "Review Gate",
-    defaultAssigneeRole: "human",
+    defaultAssigneeAgentId: "me", // Fixed to 'me' for human approval
   },
 ];
 

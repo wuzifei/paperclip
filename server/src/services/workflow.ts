@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, ne } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { workflowTemplates, workflowInstances } from "@paperclipai/db";
+import { agents, workflowTemplates, workflowInstances } from "@paperclipai/db";
 import type { WorkflowNodeDef } from "@paperclipai/db/schema/workflow_templates";
 import { notFound, unprocessable } from "../errors.js";
 
@@ -25,6 +25,7 @@ interface IssueServiceCreateFn {
       title: string;
       description?: string | null;
       status?: string;
+      assigneeAgentId?: string | null;
       assigneeUserId?: string | null;
       projectId?: string | null;
       goalId?: string | null;
@@ -177,13 +178,18 @@ export function workflowService(db: Db) {
     // ---- Instance (Instantiation) ----
 
     /**
-     * Instantiate a workflow template: creates all Issues with proper
-     * blockedBy relations, and returns the workflow instance record.
+     * v2 Single-Issue Model:
+     * Instantiate a workflow template by creating ONE issue that travels
+     * through multiple assignees as it progresses through the pipeline.
      *
-     * `issueCreate` is injected so this service stays decoupled from
-     * the full issues service (easier to test and avoids circular deps).
+     * - Finds the first node (no blockedBy dependencies)
+     * - Creates a single Issue assigned to matching agent for that node
+     * - Records issueId + currentNodeId on the workflow instance
      */
-    instantiate: async (input: InstantiateInput, issueCreate: IssueServiceCreateFn) => {
+    instantiate: async (
+      input: InstantiateInput,
+      issueCreate: IssueServiceCreateFn,
+    ) => {
       const template = await db
         .select()
         .from(workflowTemplates)
@@ -197,43 +203,49 @@ export function workflowService(db: Db) {
       if (!template) throw notFound("Workflow template not found");
 
       const nodes = template.nodes as WorkflowNodeDef[];
-      const sorted = topoSort(nodes);
+      if (nodes.length === 0) throw unprocessable("Workflow template has no nodes");
 
-      // Pre-generate instanceId so issues can reference it
+      // Find the first node: entry node with no blockedBy dependencies
+      const firstNode = nodes.find((n) => (n.blockedBy ?? []).length === 0);
+      if (!firstNode) throw unprocessable("Workflow template has no entry node (cycle detected)");
+
       const instanceId = randomUUID();
-
-      // nodeId -> created issue id
-      const nodeIssueMap: Record<string, string> = {};
-
-      for (const node of sorted) {
-        const title = interpolate(node.title, input.variables);
-        const description = node.description
-          ? interpolate(node.description, input.variables)
-          : null;
-
-        // Resolve blockedBy node IDs to already-created issue IDs
-        const blockedByIssueIds = (node.blockedBy ?? [])
-          .map((depNodeId) => nodeIssueMap[depNodeId])
-          .filter(Boolean) as string[];
-
-        const issue = await issueCreate(input.companyId, {
-          title,
-          description,
-          status: "backlog",
-          // approval_gate nodes are assigned to the human user
-          assigneeUserId: node.type === "approval_gate" ? (input.createdByUserId ?? null) : null,
-          projectId: input.projectId ?? null,
-          goalId: input.goalId ?? null,
-          blockedByIssueIds,
-          originKind: "workflow",
-          originId: instanceId,
-        });
-
-        nodeIssueMap[node.id] = issue.id;
-      }
-
-      // Persist the workflow instance
       const instanceName = interpolate(template.name, input.variables);
+      // Use user-provided title from variables if available, otherwise use node title
+      const issueTitle = input.variables.title
+        ? input.variables.title
+        : interpolate(firstNode.title, input.variables);
+      const description = firstNode.description
+        ? interpolate(firstNode.description, input.variables)
+        : null;
+
+      // Find matching agent by assigneeAgentId
+      const agent = await db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(
+          and(
+            eq(agents.companyId, input.companyId),
+            eq(agents.id, firstNode.assigneeAgentId),
+            ne(agents.status, "terminated"),
+          ),
+        )
+        .then((rows) => rows[0] ?? null);
+
+      // Create the single issue representing the whole pipeline run
+      // Use user-provided title directly, without [instanceName] prefix
+      const issue = await issueCreate(input.companyId, {
+        title: issueTitle,
+        description,
+        status: "todo",
+        assigneeAgentId: agent?.id ?? undefined,
+        projectId: input.projectId ?? null,
+        goalId: input.goalId ?? null,
+        originKind: "workflow",
+        originId: instanceId,
+      });
+
+      // Persist the workflow instance with issue binding
       const [instance] = await db
         .insert(workflowInstances)
         .values({
@@ -243,12 +255,14 @@ export function workflowService(db: Db) {
           name: instanceName,
           status: "active",
           variables: input.variables,
-          nodeIssueMap,
+          nodeIssueMap: { [firstNode.id]: issue.id },
+          issueId: issue.id,
+          currentNodeId: firstNode.id,
           createdByUserId: input.createdByUserId ?? null,
         })
         .returning();
 
-      return { instance, nodeIssueMap };
+      return { instance, issueId: issue.id };
     },
 
     // ---- Instance queries ----

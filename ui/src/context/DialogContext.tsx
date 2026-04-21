@@ -16,6 +16,7 @@ interface NewIssueDefaults {
   assigneeUserId?: string;
   title?: string;
   description?: string;
+  workflowTemplateId?: string; // pre-select a workflow template
 }
 
 interface NewGoalDefaults {

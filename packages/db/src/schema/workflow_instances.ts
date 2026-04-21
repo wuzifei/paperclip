@@ -5,16 +5,15 @@ import { workflowTemplates } from "./workflow_templates.js";
 /**
  * A running instance of a workflow template.
  *
- * Created when a user instantiates an SOP template with concrete
- * variable substitutions (e.g. feature_name = "发音评分模块").
+ * v2 (single-issue model): one Issue travels through multiple assignees.
+ *   - `issueId`       : the single Issue that represents this pipeline run
+ *   - `currentNodeId` : which template node the Issue is currently at
  *
- * `nodeIssueMap` tracks the mapping from template node IDs to the
- * actual issue IDs that were created:
- *   { [nodeId: string]: issueId (uuid string) }
+ * `nodeIssueMap` is kept for backward-compatibility (legacy multi-issue runs).
  *
  * `status`:
- *   - "active"    : pipeline is running, some nodes still pending
- *   - "completed" : all nodes resolved (done / cancelled)
+ *   - "active"    : pipeline is running
+ *   - "completed" : all nodes have been processed
  *   - "cancelled" : user manually cancelled the whole pipeline
  */
 
@@ -32,6 +31,9 @@ export const workflowInstances = pgTable(
     status: text("status").notNull().default("active"),
     variables: jsonb("variables").$type<Record<string, string>>().notNull().default({}),
     nodeIssueMap: jsonb("node_issue_map").$type<Record<string, string>>().notNull().default({}),
+    // v2 single-issue model
+    issueId: uuid("issue_id"),           // the one Issue for this pipeline run
+    currentNodeId: text("current_node_id"), // which node the issue is currently at
     createdByUserId: text("created_by_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

@@ -152,6 +152,8 @@ Practical rules:
 
 **Step 9 — Delegate if needed.** Create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`. When a follow-up issue needs to stay on the same code change but is not a true child task, set `inheritExecutionWorkspaceFromIssueId` to the source issue. Set `billingCode` for cross-team work.
 
+**⚠️ Sub-issue approval gate.** When the parent issue belongs to a workflow with an approval gate, the server may return HTTP `202` with `originKind: "sub_issue_approval_pending"` and `status: "blocked"` instead of a normal issue. This means a human must approve the sub-issue creation before the assignee agent starts working. **Do NOT retry creating the sub-issue. Do NOT implement the task yourself.** Simply acknowledge the approval is pending and move on to other work.
+
 ## Issue Dependencies (Blockers)
 
 Paperclip supports first-class blocker relationships between issues. Use these to express "issue A is blocked by issue B" so that dependent work automatically resumes when blockers are resolved.
@@ -296,6 +298,7 @@ If you are asked to create or manage routines you MUST read:
 - **Always set `parentId`** on subtasks (and `goalId` unless you're CEO/manager creating top-level work).
 - **Preserve workspace continuity for follow-ups.** Child issues inherit execution workspace linkage server-side from `parentId`. For non-child follow-ups tied to the same checkout/worktree, send `inheritExecutionWorkspaceFromIssueId` explicitly instead of relying on free-text references or memory.
 - **Never cancel cross-team tasks.** Reassign to your manager with a comment.
+- **Sub-issue approval gate.** If `POST /companies/{companyId}/issues` returns HTTP 202 with `originKind: "sub_issue_approval_pending"`, the sub-issue requires human approval. **Do NOT retry the creation. Do NOT implement the task yourself.** Move on to other work.
 - **Always update blocked issues explicitly.** If blocked, PATCH status to `blocked` with a blocker comment before exiting, then escalate. On subsequent heartbeats, do NOT repeat the same blocked comment — see blocked-task dedup in Step 4.
 - **Use first-class blockers** when a task depends on other tasks. Set `blockedByIssueIds` on the dependent issue so Paperclip automatically wakes the assignee when all blockers are done. Prefer this over ad-hoc "blocked by X" comments.
 - **@-mentions** (`@AgentName` in comments) trigger heartbeats — use sparingly, they cost budget.
